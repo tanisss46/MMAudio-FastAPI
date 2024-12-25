@@ -6,16 +6,26 @@ import subprocess
 import os
 import sys
 import uuid
+import logging
 
 app = FastAPI()
 
+# Logging setup
+logging.basicConfig(level=logging.INFO)
+
+# CORS Middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://2474875b-0133-4a74-855e-a9f7a9bd6e24.lovableproject.com"],  # Sadece bu domain izinli
+    allow_origins=[
+        "https://2474875b-0133-4a74-855e-a9f7a9bd6e24.lovableproject.com",  # Lovable domain
+        "http://localhost",  # Local development
+        "http://127.0.0.1"   # Localhost with IP
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 # Supabase bağlantı bilgileri
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
@@ -43,6 +53,7 @@ async def generate_sfx(
         video_path = os.path.join(TEMP_FOLDER, video_filename)
         with open(video_path, "wb") as f:
             f.write(await video.read())
+        logging.info(f"Video uploaded to: {video_path}")
 
         # 2. MMAudio ile ses efekti oluştur
         audio_output_filename = f"{uuid.uuid4()}_audio.flac"
@@ -56,13 +67,13 @@ async def generate_sfx(
         ]
         process = subprocess.run(cmd, capture_output=True, text=True)
         if process.returncode != 0:
+            logging.error(f"MMAudio error: {process.stderr}")
             raise HTTPException(
                 status_code=500,
-                detail=f"Ses efekti oluşturma başarısız: {process.stderr}"
+                detail=f"MMAudio error: {process.stderr}"
             )
 
-        if not os.path.exists(audio_output_path):
-            raise HTTPException(status_code=500, detail="Ses dosyası bulunamadı")
+        logging.info(f"Audio generated at: {audio_output_path}")
 
         # 3. FFmpeg ile videoya sesi ekle
         output_video_filename = f"{uuid.uuid4()}_output_video.mp4"
@@ -76,23 +87,31 @@ async def generate_sfx(
             "-strict", "experimental",
             output_video_path
         ]
-        subprocess.run(ffmpeg_cmd, check=True)
+        ffmpeg_process = subprocess.run(ffmpeg_cmd, capture_output=True, text=True)
+        if ffmpeg_process.returncode != 0:
+            logging.error(f"FFmpeg error: {ffmpeg_process.stderr}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"FFmpeg error: {ffmpeg_process.stderr}"
+            )
 
-        if not os.path.exists(output_video_path):
-            raise HTTPException(status_code=500, detail="Çıktı videosu oluşturulamadı")
+        logging.info(f"Final video created at: {output_video_path}")
 
-        # 4. Çıktı videosunu Supabase'e yükle
+        # 4. Supabase'e yükle
         supabase_video_filename = f"processed_videos/{output_video_filename}"
         with open(output_video_path, "rb") as file_data:
-            response = supabase.storage.from_(SUPABASE_BUCKET).upload(
+            upload_response = supabase.storage.from_(SUPABASE_BUCKET).upload(
                 supabase_video_filename, file_data, options={"content-type": "video/mp4"}
             )
-        if response.get("error"):
-            raise HTTPException(status_code=500, detail="Çıktı videosu yüklenemedi")
+        if upload_response.get("error"):
+            logging.error("Error uploading video to Supabase")
+            raise HTTPException(status_code=500, detail="Video upload failed")
 
+        # 5. Public URL döndür
         public_video_url = supabase.storage.from_(SUPABASE_BUCKET).get_public_url(supabase_video_filename)
+        logging.info(f"Video available at: {public_video_url}")
 
-        # 5. Geçici dosyaları temizle
+        # Geçici dosyaları temizle
         os.remove(video_path)
         os.remove(audio_output_path)
         os.remove(output_video_path)
@@ -101,8 +120,6 @@ async def generate_sfx(
             {"status": "done", "video_url": public_video_url},
             status_code=200
         )
-
-    except HTTPException as e:
-        raise e
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Bir hata oluştu: {str(e)}")
+        logging.error(f"Unexpected error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
