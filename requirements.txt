@@ -3,5 +3,6 @@ uvicorn==0.34.0
 torch==2.5.1
 torchaudio==2.5.1
 supabase
+ffmpeg -version
 --extra-index-url https://download.pytorch.org/whl/cu118
 -e ./MMAudioDir
