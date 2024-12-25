@@ -1,45 +1,15 @@
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import JSONResponse
-from fastapi.middleware.cors import CORSMiddleware
-from supabase import create_client
+from supabase import create_client, Client
 import subprocess
 import os
 import sys
+import tempfile
 import uuid
-import logging
 
 app = FastAPI()
 
-# Logging setup
-logging.basicConfig(level=logging.INFO)
-
-# CORS Middleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
-        "https://2474875b-0133-4a74-855e-a9f7a9bd6e24.lovableproject.com",  # Lovable domain
-        "http://localhost",  # Local development
-        "http://127.0.0.1"   # Localhost with IP
-    ],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# Supabase bağlantı bilgileri
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-SUPABASE_BUCKET = os.getenv("SUPABASE_BUCKET", "processed_videos")
-
-# Supabase istemcisi
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-
-# Geçici klasörler
-TEMP_FOLDER = "./temp_files/"
-OUTPUT_FOLDER = "./MMAudioDir/output/"
-os.makedirs(TEMP_FOLDER, exist_ok=True)
-os.makedirs(OUTPUT_FOLDER, exist_ok=True)
-
+# ... (CORS middleware ve Supabase istemci tanımları) ...
 
 @app.post("/generate_sfx")
 async def generate_sfx(
@@ -47,79 +17,72 @@ async def generate_sfx(
     duration: int = Form(8),
     video: UploadFile = File(...)
 ):
+    database_record_id = None
+    supabase_video_url = None
+    supabase_audio_url = None
     try:
-        # 1. Videoyu geçici olarak kaydet
-        video_filename = f"{uuid.uuid4()}_{video.filename}"
-        video_path = os.path.join(TEMP_FOLDER, video_filename)
-        with open(video_path, "wb") as f:
-            f.write(await video.read())
-        logging.info(f"Video uploaded to: {video_path}")
+        # 1. Supabase Kaydı Oluştur
+        video_db_data = {"prompt": prompt, "duration": duration, "status": "processing"}
+        response = supabase.table("user_generations").insert(video_db_data).execute()
+        if response.error:
+            raise HTTPException(status_code=500, detail=f"Veritabanı kaydı oluşturulamadı: {response.error.message}")
+        database_record_id = response.data[0]['id']
 
-        # 2. MMAudio ile ses efekti oluştur
-        audio_output_filename = f"{uuid.uuid4()}_audio.flac"
-        audio_output_path = os.path.join(OUTPUT_FOLDER, audio_output_filename)
+        # 2. Videoyu Supabase'e Yükle
+        video_filename = f"uploaded_videos/{database_record_id}_{video.filename}"
+        contents = await video.read()
+        response = supabase.storage.from_(os.environ.get("SUPABASE_BUCKET")).upload(
+            video_filename, contents, options={"content-type": video.content_type}
+        )
+        if response.error:
+            raise HTTPException(status_code=500, detail=f"Video Supabase'e yüklenemedi: {response.error.message}")
+        supabase_video_url = supabase.storage.from_(os.environ.get("SUPABASE_BUCKET")).get_public_url(video_filename)
+
+        # 3. Veritabanı Kaydını Video URL ile Güncelle
+        response = supabase.table("user_generations").update({"video_url": supabase_video_url}).eq("id", database_record_id).execute()
+        if response.error:
+            raise HTTPException(status_code=500, detail=f"Veritabanı kaydı güncellenemedi: {response.error.message}")
+
+        # 4. Ses Efekti Üret
         cmd = [
             sys.executable,
             "./MMAudioDir/demo.py",
             f"--duration={duration}",
             f"--prompt={prompt}",
-            f"--video={video_path}"
+            f"--video={supabase_video_url}"  # Orijinal video URL'si iletilebilir
         ]
-        process = subprocess.run(cmd, capture_output=True, text=True)
-        if process.returncode != 0:
-            logging.error(f"MMAudio error: {process.stderr}")
-            raise HTTPException(
-                status_code=500,
-                detail=f"MMAudio error: {process.stderr}"
-            )
+        process = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        print("MMAudio script output:", process.stdout)
+        if process.stderr:
+            print("MMAudio script errors:", process.stderr)
 
-        logging.info(f"Audio generated at: {audio_output_path}")
+        # 5. Ses Efektini Supabase'e Yükle
+        audio_filename = f"generated_audio/{database_record_id}_audio.flac"
+        output_audio_path = "./MMAudioDir/output/audio.flac"  # demo.py çıktı yolu
+        if os.path.exists(output_audio_path):
+            with open(output_audio_path, "rb") as file:
+                response = supabase.storage.from_(os.environ.get("SUPABASE_BUCKET")).upload(
+                    audio_filename, file, options={"content-type": "audio/flac"}
+                )
+            if response.error:
+                raise HTTPException(status_code=500, detail=f"Ses efekti Supabase'e yüklenemedi: {response.error.message}")
+            supabase_audio_url = supabase.storage.from_(os.environ.get("SUPABASE_BUCKET")).get_public_url(audio_filename)
+        else:
+            raise HTTPException(status_code=500, detail="Ses efekti dosyası bulunamadı.")
 
-        # 3. FFmpeg ile videoya sesi ekle
-        output_video_filename = f"{uuid.uuid4()}_output_video.mp4"
-        output_video_path = os.path.join(OUTPUT_FOLDER, output_video_filename)
-        ffmpeg_cmd = [
-            "ffmpeg",
-            "-i", video_path,
-            "-i", audio_output_path,
-            "-c:v", "copy",
-            "-c:a", "aac",
-            "-strict", "experimental",
-            output_video_path
-        ]
-        ffmpeg_process = subprocess.run(ffmpeg_cmd, capture_output=True, text=True)
-        if ffmpeg_process.returncode != 0:
-            logging.error(f"FFmpeg error: {ffmpeg_process.stderr}")
-            raise HTTPException(
-                status_code=500,
-                detail=f"FFmpeg error: {ffmpeg_process.stderr}"
-            )
+        # 6. Veritabanı Kaydını Ses URL ile Güncelle ve Tamamla
+        response = supabase.table("user_generations").update({
+            "audio_url": supabase_audio_url,
+            "status": "completed"
+        }).eq("id", database_record_id).execute()
+        if response.error:
+            raise HTTPException(status_code=500, detail=f"Veritabanı kaydı güncellenemedi: {response.error.message}")
 
-        logging.info(f"Final video created at: {output_video_path}")
+        return JSONResponse({"id": database_record_id, "video_url": supabase_video_url, "audio_url": supabase_audio_url}, status_code=200)
 
-        # 4. Supabase'e yükle
-        supabase_video_filename = f"processed_videos/{output_video_filename}"
-        with open(output_video_path, "rb") as file_data:
-            upload_response = supabase.storage.from_(SUPABASE_BUCKET).upload(
-                supabase_video_filename, file_data, options={"content-type": "video/mp4"}
-            )
-        if upload_response.get("error"):
-            logging.error("Error uploading video to Supabase")
-            raise HTTPException(status_code=500, detail="Video upload failed")
-
-        # 5. Public URL döndür
-        public_video_url = supabase.storage.from_(SUPABASE_BUCKET).get_public_url(supabase_video_filename)
-        logging.info(f"Video available at: {public_video_url}")
-
-        # Geçici dosyaları temizle
-        os.remove(video_path)
-        os.remove(audio_output_path)
-        os.remove(output_video_path)
-
-        return JSONResponse(
-            {"status": "done", "video_url": public_video_url},
-            status_code=200
-        )
+    except subprocess.CalledProcessError as e:
+        # ... (Hata yönetimi ve veritabanı güncelleme) ...
+    except HTTPException as e:
+        # ... (Hata yönetimi ve veritabanı güncelleme) ...
     except Exception as e:
-        logging.error(f"Unexpected error: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
+        # ... (Hata yönetimi ve veritabanı güncelleme) ...
