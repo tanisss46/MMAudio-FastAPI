@@ -3,8 +3,8 @@ uvicorn==0.34.0
 torch==2.5.1
 torchaudio==2.5.1
 --extra-index-url https://download.pytorch.org/whl/cu118
+-e ./MMAudioDir
 python-multipart==0.0.6
 supabase
 python-dotenv==1.0.0
 python-magic==0.4.27
--e ./MMAudioDir
