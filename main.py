@@ -16,7 +16,7 @@ app = FastAPI()
 # Add CORS middleware here, before any routes are defined
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://lovable.dev/projects/2474875b-0133-4a74-855e-a9f7a9bd6e24"],  # Use the provided Lovable URL
+    allow_origins=["https://2474875b-0133-4a74-855e-a9f7a9bd6e24.lovableproject.com"],  # Use the provided Lovable URL
     allow_credentials=True,
     allow_methods=["POST"],  # Be specific about allowed methods
     allow_headers=["*"],  # Allow all headers for simplicity, consider narrowing down in production
