@@ -5,33 +5,57 @@ import subprocess
 import os
 import sys
 import tempfile
-import uuid  # For generating unique filenames
-from fastapi.middleware.cors import CORSMiddleware  # Import the middleware
+import uuid
+from fastapi.middleware.cors import CORSMiddleware
+from typing import List
+import magic  # for file type validation
 
 print(sys.path)
 print(sys.executable)
 
 app = FastAPI()
 
-# Add CORS middleware here, before any routes are defined
+# Add CORS middleware with more permissive configuration
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://2474875b-0133-4a74-855e-a9f7a9bd6e24.lovableproject.com"],  # Use the provided Lovable URL
+    allow_origins=["https://2474875b-0133-4a74-855e-a9f7a9bd6e24.lovableproject.com"],
     allow_credentials=True,
-    allow_methods=["POST"],  # Be specific about allowed methods
-    allow_headers=["*"],  # Allow all headers for simplicity, consider narrowing down in production
+    allow_methods=["GET", "POST", "OPTIONS"],  # Added more methods
+    allow_headers=["*"],
 )
 
-# Initialize Supabase client (replace with your actual URL and Key)
+# Initialize Supabase client
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
-if not SUPABASE_URL or not SUPABASE_KEY:
-    raise ValueError("Supabase URL and Key environment variables must be set.")
+SUPABASE_BUCKET = os.environ.get("SUPABASE_BUCKET")
+
+if not all([SUPABASE_URL, SUPABASE_KEY, SUPABASE_BUCKET]):
+    raise ValueError("Required environment variables are not set")
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# Replace with your Supabase storage bucket name
-SUPABASE_BUCKET = "your-storage-bucket-name"
+# Constants
+MAX_VIDEO_SIZE = 100 * 1024 * 1024  # 100MB
+ALLOWED_VIDEO_TYPES = ["video/mp4", "video/quicktime", "video/x-msvideo"]
+
+def validate_video_file(file: UploadFile) -> None:
+    """Validate video file size and type."""
+    if file.size > MAX_VIDEO_SIZE:
+        raise HTTPException(
+            status_code=400,
+            detail=f"File size exceeds maximum limit of {MAX_VIDEO_SIZE/1024/1024}MB"
+        )
+    
+    # Read first 2048 bytes for file type detection
+    file_header = file.file.read(2048)
+    file.file.seek(0)  # Reset file pointer
+    mime_type = magic.from_buffer(file_header, mime=True)
+    
+    if mime_type not in ALLOWED_VIDEO_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid file type. Allowed types: {', '.join(ALLOWED_VIDEO_TYPES)}"
+        )
 
 @app.post("/generate_sfx")
 async def generate_sfx(
@@ -39,24 +63,41 @@ async def generate_sfx(
     duration: int = Form(8),
     video: UploadFile = File(None)
 ):
+    temp_files = []  # Track temporary files for cleanup
     supabase_video_url = None
     supabase_audio_url = None
     database_record_id = None
 
     try:
+        # Validate video if provided
+        if video:
+            validate_video_file(video)
+
         # 1. Upload Video to Supabase (if provided)
         if video:
             video_filename = f"{uuid.uuid4()}_{video.filename}"
+            temp_video_path = os.path.join(tempfile.gettempdir(), video_filename)
+            temp_files.append(temp_video_path)
+            
+            # Save uploaded file temporarily
+            with open(temp_video_path, "wb") as temp_file:
+                content = await video.read()
+                temp_file.write(content)
+
             try:
-                response = supabase.storage.from_(SUPABASE_BUCKET).upload(
-                    f"uploaded_videos/{video_filename}", video.file
-                )
-                if response.status_code == 200:
-                    supabase_video_url = supabase.storage.from_(SUPABASE_BUCKET).get_public_url(f"uploaded_videos/{video_filename}")
-                else:
-                    raise HTTPException(status_code=500, detail=f"Error uploading video to Supabase: {response.text}")
+                with open(temp_video_path, "rb") as video_file:
+                    response = supabase.storage.from_(SUPABASE_BUCKET).upload(
+                        f"uploaded_videos/{video_filename}",
+                        video_file
+                    )
+                    supabase_video_url = supabase.storage.from_(SUPABASE_BUCKET).get_public_url(
+                        f"uploaded_videos/{video_filename}"
+                    )
             except Exception as e:
-                raise HTTPException(status_code=500, detail=f"Error uploading video to Supabase: {e}")
+                raise HTTPException(
+                    status_code=500,
+                    detail="Error uploading video to storage"
+                )
 
         # 2. Create Metadata Record in Supabase
         try:
@@ -136,5 +177,10 @@ async def generate_sfx(
                 print(f"Error updating database with general failure status: {db_update_error}")
         raise HTTPException(status_code=500, detail=str(e))
     finally:
-        # Clean up temporary files if needed (though demo.py seems to handle this)
-        pass
+        # Clean up temporary files
+        for temp_file in temp_files:
+            try:
+                if os.path.exists(temp_file):
+                    os.remove(temp_file)
+            except Exception as e:
+                print(f"Error cleaning up temporary file {temp_file}: {e}")
