@@ -9,20 +9,35 @@ import uuid
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List
 import magic  # for file type validation
+from dotenv import load_dotenv
+
+
+load_dotenv()
 
 print(sys.path)
 print(sys.executable)
 
 app = FastAPI()
 
-# Add CORS middleware with more permissive configuration
+# Configure CORS
+origins = [
+    "https://2474875b-0133-4a74-855e-a9f7a9bd6e24.lovableproject.com",
+     "http://localhost:3000",
+    ]
+
+if os.getenv("ENVIRONMENT") == "production":
+    origins = [
+        "https://2474875b-0133-4a74-855e-a9f7a9bd6e24.lovableproject.com"
+        ]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://2474875b-0133-4a74-855e-a9f7a9bd6e24.lovableproject.com"],
+    allow_origins=origins,
     allow_credentials=True,
-    allow_methods=["GET", "POST", "OPTIONS"],  # Added more methods
-    allow_headers=["*"],
+    allow_methods=["*"], # Allow all methods
+    allow_headers=["*"], # Allow all headers
 )
+
 
 # Initialize Supabase client
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
