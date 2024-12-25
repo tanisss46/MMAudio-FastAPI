@@ -52,12 +52,12 @@ async def generate_sfx(
             try:
                 contents = await video.read() # Video içeriğini oku
                 response = supabase.storage.from_(SUPABASE_BUCKET).upload(
-                    f"uploaded_videos/{video_filename}", contents
-                )
-                if response.status_code == 200:
-                    supabase_video_url = supabase.storage.from_(SUPABASE_BUCKET).get_public_url(f"uploaded_videos/{video_filename}")
-                else:
-                    raise HTTPException(status_code=500, detail=f"Error uploading video to Supabase: {response.text}")
+    f"uploaded_videos/{video_filename}", contents
+)
+if response.error is None:
+    supabase_video_url = supabase.storage.from_(SUPABASE_BUCKET).get_public_url(f"uploaded_videos/{video_filename}")
+else:
+    raise HTTPException(status_code=500, detail=f"Error uploading video to Supabase: {response.error.message}")
             except Exception as e:
                 raise HTTPException(status_code=500, detail=f"Error uploading video to Supabase: {e}")
 
