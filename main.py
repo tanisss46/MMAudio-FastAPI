@@ -1,43 +1,28 @@
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import FileResponse
+from fastapi.middleware.cors import CORSMiddleware
 from supabase import create_client, Client
 import subprocess
 import os
 import sys
 import tempfile
 import uuid
-from fastapi.middleware.cors import CORSMiddleware
 from typing import List
-import magic  # for file type validation
-from dotenv import load_dotenv
-
-
-load_dotenv()
+import magic
 
 print(sys.path)
 print(sys.executable)
 
 app = FastAPI()
 
-# Configure CORS
-origins = [
-    "https://2474875b-0133-4a74-855e-a9f7a9bd6e24.lovableproject.com",
-     "http://localhost:3000",
-    ]
-
-if os.getenv("ENVIRONMENT") == "production":
-    origins = [
-        "https://2474875b-0133-4a74-855e-a9f7a9bd6e24.lovableproject.com"
-        ]
-
+# CORS configuration for Render deployment
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=True,
-    allow_methods=["*"], # Allow all methods
-    allow_headers=["*"], # Allow all headers
+    allow_origins=["*"],  # Temporarily allow all origins for testing
+    allow_credentials=False,  # Must be False when allow_origins=["*"]
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
-
 
 # Initialize Supabase client
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
