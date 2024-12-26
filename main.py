@@ -15,13 +15,26 @@ print(sys.executable)
 
 app = FastAPI()
 
-# CORS configuration for Render deployment
+# Explicit CORS configuration
+origins = [
+    "https://2474875b-0133-4a74-855e-a9f7a9bd6e24.lovableproject.com",
+    "http://2474875b-0133-4a74-855e-a9f7a9bd6e24.lovableproject.com",
+    "http://localhost:3000",
+    "http://localhost:5173"
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Temporarily allow all origins for testing
-    allow_credentials=False,  # Must be False when allow_origins=["*"]
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=[
+        "Content-Type",
+        "Accept",
+        "Authorization",
+        "Origin",
+        "X-Requested-With"
+    ],
 )
 
 # Initialize Supabase client
@@ -184,3 +197,12 @@ async def generate_sfx(
                     os.remove(temp_file)
             except Exception as e:
                 print(f"Error cleaning up temporary file {temp_file}: {e}")
+
+# Add health check endpoint
+@app.get("/health")
+async def health_check():
+    return {"status": "healthy"}
+
+@app.get("/")
+async def root():
+    return {"message": "MMAudio API is running"}
